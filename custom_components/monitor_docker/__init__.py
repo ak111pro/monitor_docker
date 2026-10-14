@@ -28,6 +28,7 @@ from homeassistant.helpers.reload import async_setup_reload_service
 from .config_flow import DockerConfigFlow
 from .const import (
     API,
+    HOST_DEVICE_ID,
     CONF_CERTPATH,
     CONF_CONTAINERS,
     CONF_CONTAINERS_EXCLUDE,
@@ -182,7 +183,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         assert entry.unique_id
         device_registry = dr.async_get(hass)
         config_id = f"{entry.data[CONF_NAME]}_{entry.data[CONF_URL]}"
-        device_registry.async_get_or_create(
+        host_device = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, config_id)},
             manufacturer="Docker",
@@ -195,6 +196,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.data[CONF_NAME]] = {}
         hass.data[DOMAIN][entry.data[CONF_NAME]][CONFIG] = entry.data
         hass.data[DOMAIN][entry.data[CONF_NAME]][API] = api
+        hass.data[DOMAIN][entry.data[CONF_NAME]][HOST_DEVICE_ID] = host_device.id
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except ConfigEntryAuthFailed:

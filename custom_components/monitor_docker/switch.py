@@ -19,6 +19,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
 
 from .const import (
+    HOST_DEVICE_ID,
     API,
     ATTR_NAME,
     ATTR_SERVER,
@@ -149,6 +150,7 @@ async def async_setup_platform(
                         instance=instance,
                         cname=cname,
                         config=config,
+                        host_device_id=hass.data[DOMAIN][instance].get(HOST_DEVICE_ID),
                     )
                 )
             else:
@@ -177,8 +179,15 @@ class DockerContainerSwitch(SwitchEntity, DockerContainerEntity):
         instance: str,
         cname: str,
         config: Mapping[str, Any],
+        host_device_id: str | None = None,
     ):
-        super().__init__(container, instance, cname)
+        super().__init__(
+            container,
+            instance,
+            cname,
+            host_device_id,
+            device_name=legacy_ids.alias_name(config, cname),
+        )
 
         self._container = container
         self._instance = instance

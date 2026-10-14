@@ -17,6 +17,8 @@ from homeassistant.helpers.entity import Entity
 import homeassistant.util.dt as dt_util
 from dateutil import parser, relativedelta
 from homeassistant.const import (
+    MAJOR_VERSION,
+    MINOR_VERSION,
     CONF_NAME,
     CONF_SCAN_INTERVAL,
     CONF_URL,
@@ -73,6 +75,9 @@ from .const import (
     DOMAIN,
     PRECISION,
 )
+
+# DeviceInfo["via_device_id"] exists since Home Assistant 2026.10
+VIA_DEVICE_ID_SUPPORTED = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 10)
 
 VERSION = "1.20"
 
@@ -775,10 +780,12 @@ class DockerAPI:
                 # Now go through all containers and get the cpu/memory stats
                 for container in self._containers.values():
                     if container is None:
-                        _LOGGER.warning(
-                            "[%s]: run_docker_info container is not yet initilized",
+                        # Still being set up by run(); counted in the next pass
+                        _LOGGER.debug(
+                            "[%s]: run_docker_info container is not yet initialized",
                             self._instance,
                         )
+                        continue
                     try:
                         info = container.get_info()
                         if info.get(CONTAINER_INFO_STATE) == "running":
@@ -1790,15 +1797,34 @@ class DockerContainerEntity(Entity):
     """Generic entity functions."""
 
     def __init__(
-        self, container: DockerContainerAPI, instance: str, cname: str
+        self,
+        container: DockerContainerAPI,
+        instance: str,
+        cname: str,
+        host_device_id: str | None = None,
+        device_name: str | None = None,
     ) -> None:
         """Initialize the base for Container entities."""
         container_info = container.get_info()
+        # The device carries the display name (rename alias): Home Assistant
+        # builds friendly names as "<device> <entity>" and strips the device
+        # name from entity names starting with it, so "ESPHome 1CPU" stays
+        # "ESPHome 1CPU" exactly as in the YAML-only releases.
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{instance}_container_{cname}")},
-            name=cname,
+            name=device_name or cname,
             manufacturer="Docker",
             model="Docker Container",
             entry_type=DeviceEntryType.SERVICE,
-            via_device=(DOMAIN, f"{instance}_{container._config[CONF_URL]}"),
         )
+        # Link the container device to the Docker host device. Home Assistant
+        # 2026.10 replaced the (domain, identifier) tuple `via_device` with the
+        # registry id `via_device_id` and rejects the old key for entities.
+        if VIA_DEVICE_ID_SUPPORTED:
+            if host_device_id is not None:
+                self._attr_device_info["via_device_id"] = host_device_id
+        else:
+            self._attr_device_info["via_device"] = (
+                DOMAIN,
+                f"{instance}_{container._config[CONF_URL]}",
+            )

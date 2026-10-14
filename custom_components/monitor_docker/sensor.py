@@ -21,6 +21,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
 
 from .const import (
+    HOST_DEVICE_ID,
     API,
     ATTR_MEMORY_LIMIT,
     ATTR_ONLINE_CPUS,
@@ -155,6 +156,7 @@ async def async_setup_platform(
                         cname=cname,
                         description=CONTAINER_MONITOR_LIST[CONTAINER_INFO_ALLINONE],
                         config=config,
+                        host_device_id=hass.data[DOMAIN][instance].get(HOST_DEVICE_ID),
                         condition_list=monitor_conditions,
                     )
                 ]
@@ -174,6 +176,7 @@ async def async_setup_platform(
                                 cname=cname,
                                 description=CONTAINER_MONITOR_LIST[variable],
                                 config=config,
+                                host_device_id=hass.data[DOMAIN][instance].get(HOST_DEVICE_ID),
                             )
                         ]
 
@@ -298,9 +301,16 @@ class DockerContainerSensor(SensorEntity, DockerContainerEntity):
         description: SensorEntityDescription,
         config: Mapping[str, Any],
         condition_list: list | None = None,
+        host_device_id: str | None = None,
     ):
         """Initialize the sensor."""
-        super().__init__(container, instance, cname)
+        super().__init__(
+            container,
+            instance,
+            cname,
+            host_device_id,
+            device_name=legacy_ids.alias_name(config, cname),
+        )
 
         self._instance = instance
         self._container = container
