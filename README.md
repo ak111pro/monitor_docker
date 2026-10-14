@@ -69,14 +69,30 @@ NOTE: This is untested, use at your own risk!
 
 #### GUI Assisted
 
-1. Klick Add integration and select "Monitor Docker"
-2. Set-up connection to Docker host
-3. Select which Containers to monitor
-4. Select which Conditions to monitor for both the host and each Container
+1. Click **Add integration** and select "Monitor Docker"
+2. Set up the connection to the Docker host
+3. Select which containers to monitor (leave empty for all, including new ones)
+4. Select which conditions to monitor for the host and for each container
+
+Containers and conditions can be changed later with **Reconfigure**.
+
+#### Moving from `configuration.yaml`
+
+Existing `monitor_docker:` entries are imported into a config entry on the
+next start, one entry per Docker host. Everything in the YAML is taken over,
+including `prefix`, `rename`, `rename_entity`, `containers_exclude` and the
+`sensorname`/`switchname`/`buttonname` formats, so **entity IDs and names stay
+the same** and dashboards, automations and history keep working.
+
+After the import a Repair issue reminds you to remove the `monitor_docker:`
+section from `configuration.yaml`; it is ignored from then on. Switches and
+buttons now have unique IDs, so they can be renamed, hidden or assigned to an
+area in the UI.
 
 #### Manual
 
-> **IMPORTANT NOTICE!**: While manual configuration in `configuration.yaml` is still possible it will only be converted into a UI ConfigEntry upon first boot and after that ignored (while displaying a Repair issue to remove deprecaded onused config). It's recommended to setup the integration directly from UI using above process
+> **Note:** `configuration.yaml` is only read once, to import it into a config
+> entry (see above). New installations should use the UI.
 
 To use the `monitor_docker` in your installation, add the following to your `configuration.yaml` file:
 
