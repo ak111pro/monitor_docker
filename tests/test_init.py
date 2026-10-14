@@ -119,3 +119,20 @@ async def test_reload_service_refreshes(hass: HomeAssistant, mock_docker_api) ->
     await hass.services.async_call(DOMAIN, "reload", blocking=True)
 
     api.request_refresh.assert_called_once()
+
+
+async def test_repair_issue_removed_with_yaml(
+    hass: HomeAssistant, mock_docker_api
+) -> None:
+    """The import issue exists after the import and goes away with the YAML."""
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.monitor_docker import async_setup
+
+    await _setup_yaml(hass, [dict(YAML_HOST)])
+    issues = ir.async_get(hass)
+    assert issues.async_get_issue(DOMAIN, "remove_configuration_yaml_Docker")
+
+    # next start without the YAML section
+    await async_setup(hass, {})
+    assert issues.async_get_issue(DOMAIN, "remove_configuration_yaml_Docker") is None

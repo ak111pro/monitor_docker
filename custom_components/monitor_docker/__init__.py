@@ -22,6 +22,7 @@ from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
 )
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.reload import async_setup_reload_service
 
@@ -132,6 +133,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.services.async_register(DOMAIN, SERVICE_RELOAD, async_handle_reload)
 
     if DOMAIN not in config:
+        # The YAML section is gone: drop the "remove it from configuration.yaml"
+        # repair issues created by earlier imports.
+        issue_registry = ir.async_get(hass)
+        for domain, issue_id in list(issue_registry.issues):
+            if domain == DOMAIN and issue_id.startswith("remove_configuration_yaml_"):
+                ir.async_delete_issue(hass, DOMAIN, issue_id)
         return True  # To continue with async_setup_entry
 
     # Now go through all possible entries, we support 1 or more docker hosts (untested)
@@ -240,8 +247,11 @@ async def async_reset_platform(hass: HomeAssistant, integration_name: str) -> No
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Remove a config entry."""
 
-    if entry.data[CONF_NAME] in hass.data[DOMAIN]:
+    if entry.data[CONF_NAME] in hass.data.get(DOMAIN, {}):
         hass.data[DOMAIN].pop(entry.data[CONF_NAME])
+    ir.async_delete_issue(
+        hass, DOMAIN, f"remove_configuration_yaml_{entry.data[CONF_NAME]}"
+    )
 
 
 #################################################################
