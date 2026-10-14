@@ -161,7 +161,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 data=entry,
             )
         )
-        return True
 
     return True
 
@@ -219,9 +218,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     _LOGGER.debug("async_unload_entry")
 
-    await hass.data[DOMAIN][entry.data[CONF_NAME]][API].destroy()
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        data = hass.data.get(DOMAIN, {}).pop(entry.data[CONF_NAME], None)
+        if data and data.get(API):
+            await data[API].destroy()
 
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return unload_ok
 
 
 #################################################################

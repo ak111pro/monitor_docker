@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -56,34 +57,41 @@ from .helpers import DockerAPI
 _LOGGER = logging.getLogger(__name__)
 
 
+DEFAULT_ENTRY_DATA: dict[str, Any] = {
+    # User
+    CONF_NAME: DEFAULT_NAME,
+    CONF_URL: "",
+    CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
+    CONF_CERTPATH: "",
+    CONF_RETRY: DEFAULT_RETRY,
+    CONF_VERSION: "auto",
+    # Containers
+    CONF_CONTAINERS: [],
+    CONF_CONTAINERS_EXCLUDE: [],  # Not relevant as all are selected
+    # Conditions
+    CONF_MONITORED_CONDITIONS: [],
+    CONF_SWITCHENABLED: True,
+    CONF_BUTTONENABLED: False,
+    CONF_MEMORYCHANGE: 100,
+    CONF_PRECISION_CPU: PRECISION,
+    CONF_PRECISION_DISK_MB: PRECISION,
+    CONF_PRECISION_MEMORY_MB: PRECISION,
+    CONF_PRECISION_MEMORY_PERCENTAGE: PRECISION,
+    CONF_PRECISION_NETWORK_KB: PRECISION,
+    CONF_PRECISION_NETWORK_MB: PRECISION,
+}
+
+
 class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Docker config flow."""
 
     VERSION = 1
     MINOR_VERSION = 1
-    data = {
-        # User
-        CONF_NAME: DEFAULT_NAME,
-        CONF_URL: "",
-        CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
-        CONF_CERTPATH: "",
-        CONF_RETRY: DEFAULT_RETRY,
-        CONF_VERSION: "auto",
-        # Containers
-        CONF_CONTAINERS: [],
-        CONF_CONTAINERS_EXCLUDE: [],  # Not relevant as all are selected
-        # Conditions
-        CONF_MONITORED_CONDITIONS: [],
-        CONF_SWITCHENABLED: True,
-        CONF_BUTTONENABLED: False,
-        CONF_MEMORYCHANGE: 100,
-        CONF_PRECISION_CPU: PRECISION,
-        CONF_PRECISION_DISK_MB: PRECISION,
-        CONF_PRECISION_MEMORY_MB: PRECISION,
-        CONF_PRECISION_MEMORY_PERCENTAGE: PRECISION,
-        CONF_PRECISION_NETWORK_KB: PRECISION,
-        CONF_PRECISION_NETWORK_MB: PRECISION,
-    }
+
+    def __init__(self) -> None:
+        """Start every flow with its own copy of the defaults."""
+        self.data: dict[str, Any] = copy.deepcopy(DEFAULT_ENTRY_DATA)
+
     options = None
     _docker_api = None
     _config_entry: ConfigEntry | None = None
@@ -323,13 +331,9 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
         self._abort_if_unique_id_configured()
-        if exclude := import_info.pop(CONF_CONTAINERS_EXCLUDE, None):
-            import_info[CONF_CONTAINERS] = [
-                container
-                for container in import_info[CONF_CONTAINERS]
-                if container not in exclude
-            ]
-        for key, value in import_info.items():
-            if key in self.data and key not in [CONF_CONTAINERS_EXCLUDE]:
-                self.data[key] = value
+        # Keep every YAML key: prefix, rename, rename_entity and the name formats
+        # are needed to keep the entity_ids of existing installs unchanged.
+        # containers_exclude is kept as-is (folding it into an empty
+        # "containers" list would silently monitor the excluded containers).
+        self.data.update(copy.deepcopy(dict(import_info)))
         return self.async_create_entry(title=self.data[CONF_NAME], data=self.data)
