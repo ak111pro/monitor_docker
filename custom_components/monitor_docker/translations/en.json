@@ -52,7 +52,7 @@
                 }
             },
             "conditions": {
-                "description": "Setup a connection to docker host",
+                "description": "Select what to monitor",
                 "data": {
                     "monitored_docker_conditions": "Conditions of the controller to be monitored",
                     "monitored_container_conditions": "Conditions of each container to be monitored",
@@ -73,13 +73,15 @@
         },
         "abort": {
             "reauth_successful": "Reauthorization successful",
-            "reconfigure_successful": "Reconfiguration successful"
+            "reconfigure_successful": "Reconfiguration successful",
+            "already_configured": "This Docker daemon is already configured",
+            "reconfigure_failed": "The entry to reconfigure was not found"
         }
     },
     "issues": {
         "remove_configuration_yaml": {
-            "description": "Fist ensure that your integration settings from configuration.yaml still are intact (renaming is no longer available). Explicit settings can be viewed and changed in the Reconfigure meny for each integration istance.\nRenaming can be done on device or entiti level in UI.\nThen remove your settings for {domain} {integration_title} from configuration.yaml to get rid of this message.",
-            "title": "Manually configured {integration_title} no longer used"
+            "title": "{integration_title} was imported from configuration.yaml",
+            "description": "The settings of {integration_title} were imported from configuration.yaml into a config entry, including prefix, rename, rename_entity and the name formats, so your entity IDs stay the same.\n\nCheck the integration, then remove the {domain} section from configuration.yaml and restart Home Assistant to remove this message. Containers and conditions can be changed with Reconfigure, names per entity or device in the UI."
         }
     }
 }

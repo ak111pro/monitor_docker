@@ -94,6 +94,8 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
 
     options = None
     _docker_api = None
+    # True when this flow opened its own test connection (closed when done)
+    _owns_docker_api = False
     _config_entry: ConfigEntry | None = None
     _docker_conditions = DOCKER_PRE_SELECTION
     _container_conditions = CONTAINER_PRE_SELECTION
@@ -113,13 +115,14 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
             user_input[CONF_MEMORYCHANGE] = self.data[CONF_MEMORYCHANGE]
 
             # Test connection to Docker
+            await self._async_close_docker_api()
             try:
                 self._docker_api = DockerAPI(self.hass, user_input)
+                self._owns_docker_api = True
                 await self._docker_api.init()
-                #errors["base"] = "invalid_connection"
-            except Exception as e:  # pylint: disable=broad-except
-                _LOGGER.exception("Unhandled exception in user step")
-                errors["base"] = str(e)
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Could not connect to Docker in user step")
+                errors["base"] = "invalid_connection"
 
             # Unless re-authorization, check and abort if name already exists
             if self.source != SOURCE_REAUTH:
@@ -135,6 +138,7 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 if self.source == SOURCE_REAUTH:
+                    await self._async_close_docker_api()
                     return self.async_update_reload_and_abort(
                         self._config_entry,
                         data=self.data,
@@ -171,6 +175,12 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
         self.data = {**self._config_entry.data}
         self._docker_api = self.hass.data[DOMAIN][self._config_entry.data[CONF_NAME]][
             API
+        ]
+        # Preselect what the entry monitors today instead of the defaults
+        monitored = self.data.get(CONF_MONITORED_CONDITIONS) or []
+        self._docker_conditions = [c for c in monitored if c in DOCKER_MONITOR_LIST]
+        self._container_conditions = [
+            c for c in monitored if c in CONTAINER_MONITOR_LIST
         ]
 
         return self.async_show_menu(
@@ -248,6 +258,7 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
                         data=self.data,
                         reason="reconfigure_successful",
                     )
+                await self._async_close_docker_api()
                 return self.async_create_entry(
                     title=self.data[CONF_NAME], data=self.data
                 )
@@ -308,6 +319,17 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _async_close_docker_api(self) -> None:
+        """Close the test connection opened by this flow (never the live one)."""
+        if self._docker_api is not None and self._owns_docker_api:
+            try:
+                await self._docker_api.destroy()
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug("Closing the test connection failed", exc_info=True)
+        if self._owns_docker_api:
+            self._docker_api = None
+        self._owns_docker_api = False
+
     async def async_step_import(
         self, import_info: Mapping[str, Any]
     ) -> ConfigFlowResult:
@@ -320,7 +342,7 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
             hass=self.hass,
             domain=DOMAIN,
             issue_id=f"remove_configuration_yaml_{import_info[CONF_NAME]}",
-            is_fixable=True,
+            is_fixable=False,
             is_persistent=True,
             issue_domain=DOMAIN,
             severity=ir.IssueSeverity.WARNING,

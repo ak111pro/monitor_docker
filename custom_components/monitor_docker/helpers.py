@@ -336,6 +336,9 @@ class DockerAPI:
         # Cancel the containers
 
         for container in self._containers.values():
+            # init() only registers the names; run() creates the container APIs
+            if container is None:
+                continue
             _LOGGER.debug(
                 "[%s] %s: Container cancelled", self._instance, container._name
             )
@@ -345,6 +348,13 @@ class DockerAPI:
         # Close session if initialized
         if self._tcp_session:
             self._tcp_session.detach()
+        elif self._api is not None:
+            # Unix socket: aiodocker owns its session, close it to avoid an
+            # "Unclosed client session" warning
+            try:
+                await self._api.close()
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("[%s]: Closing Docker API failed: %s", self._instance, err)
 
         # Clear api value
         # self._api = None

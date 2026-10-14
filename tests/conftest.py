@@ -40,7 +40,9 @@ def mock_docker_api() -> Generator[MagicMock]:
 
     def factory(hass, config):
         api = MagicMock(name="DockerAPI")
-        api.init = AsyncMock()
+        api.init = AsyncMock(
+            side_effect=OSError("connection refused") if factory.fail_init else None
+        )
         api.run = AsyncMock()
         api.destroy = AsyncMock()
         api.list_containers.return_value = list(containers)
@@ -51,6 +53,7 @@ def mock_docker_api() -> Generator[MagicMock]:
         return api
 
     factory.instances = []
+    factory.fail_init = False
     with (
         patch("custom_components.monitor_docker.DockerAPI", side_effect=factory),
         patch(
