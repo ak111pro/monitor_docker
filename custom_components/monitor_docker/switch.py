@@ -33,7 +33,9 @@ from .const import (
 from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
 
 
-SERVICE_RESTART_SCHEMA = vol.Schema({ATTR_NAME: cv.string, ATTR_SERVER: cv.string})
+SERVICE_RESTART_SCHEMA = vol.Schema(
+    {ATTR_NAME: cv.string, vol.Optional(ATTR_SERVER): cv.string}
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +66,7 @@ async def async_setup_platform(
         cname = parm.data[ATTR_NAME]
         cserver = parm.data.get(ATTR_SERVER, None)
 
-        server_name = name
+        server_name = instance
         if cserver is not None:
             if cserver not in hass.data[DOMAIN]:
                 _LOGGER.error("Server '%s' is not configured", cserver)

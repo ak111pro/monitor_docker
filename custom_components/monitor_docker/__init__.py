@@ -15,7 +15,7 @@ from homeassistant.const import (
     CONF_URL,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import (
     ConfigEntryNotReady,
     ConfigEntryError,
@@ -33,6 +33,7 @@ from .const import (
     CONF_CONTAINERS_EXCLUDE,
     CONF_MEMORYCHANGE,
     CONF_PRECISION_CPU,
+    CONF_PRECISION_DISK_MB,
     CONF_PRECISION_MEMORY_MB,
     CONF_PRECISION_MEMORY_PERCENTAGE,
     CONF_PRECISION_NETWORK_KB,
@@ -46,6 +47,7 @@ from .const import (
     CONF_SWITCHNAME,
     CONF_BUTTONENABLED,
     CONF_BUTTONNAME,
+    CONF_VERSION,
     CONFIG,
     CONTAINER_INFO_ALLINONE,
     DEFAULT_NAME,
@@ -57,6 +59,7 @@ from .const import (
     DOMAIN,
     MONITORED_CONDITIONS_LIST,
     PRECISION,
+    SERVICE_RELOAD,
 )
 from .helpers import DockerAPI
 
@@ -69,9 +72,13 @@ DOCKER_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
         vol.Optional(CONF_PREFIX, default=""): cv.string,
         vol.Optional(CONF_URL, default=None): vol.Any(cv.string, None),
-        vol.Optional(
-            CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-        ): cv.positive_int,
+        vol.Optional(CONF_VERSION, default="auto"): cv.string,
+        # Seconds as int (config entries store an int). Time-period strings like
+        # "00:00:10", which the YAML-only releases accepted, are still accepted.
+        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.Any(
+            cv.positive_int,
+            vol.All(cv.time_period, lambda td: int(td.total_seconds())),
+        ),
         vol.Optional(CONF_MONITORED_CONDITIONS, default=[]): vol.All(
             cv.ensure_list,
             [vol.In(MONITORED_CONDITIONS_LIST)],
@@ -93,6 +100,7 @@ DOCKER_SCHEMA = vol.Schema(
         vol.Optional(CONF_RETRY, default=DEFAULT_RETRY): cv.positive_int,
         vol.Optional(CONF_MEMORYCHANGE, default=100): cv.positive_int,
         vol.Optional(CONF_PRECISION_CPU, default=PRECISION): cv.positive_int,
+        vol.Optional(CONF_PRECISION_DISK_MB, default=PRECISION): cv.positive_int,
         vol.Optional(CONF_PRECISION_MEMORY_MB, default=PRECISION): cv.positive_int,
         vol.Optional(
             CONF_PRECISION_MEMORY_PERCENTAGE, default=PRECISION
@@ -110,6 +118,17 @@ CONFIG_SCHEMA = vol.Schema(
 #################################################################
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Will setup the Monitor Docker platform."""
+
+    # Register an on-demand reload/refresh service. Calling it wakes every poll
+    # loop so fresh Docker data is fetched immediately instead of waiting for the
+    # next scan_interval.
+    async def async_handle_reload(call: ServiceCall) -> None:
+        for _name, data in hass.data.get(DOMAIN, {}).items():
+            api = data.get(API)
+            if api is not None:
+                api.request_refresh()
+
+    hass.services.async_register(DOMAIN, SERVICE_RELOAD, async_handle_reload)
 
     if DOMAIN not in config:
         return True  # To continue with async_setup_entry

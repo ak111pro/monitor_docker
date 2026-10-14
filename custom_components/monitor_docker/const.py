@@ -19,6 +19,7 @@ CONF_MEMORYCHANGE = "memorychange"
 CONF_MONITORED_CONTAINER_CONDITIONS = "monitored_container_conditions"
 CONF_MONITORED_DOCKER_CONDITIONS = "monitored_docker_conditions"
 CONF_PRECISION_CPU = "precision_cpu"
+CONF_PRECISION_DISK_MB = "precision_disk_mb"
 CONF_PRECISION_MEMORY_MB = "precision_memory_mb"
 CONF_PRECISION_MEMORY_PERCENTAGE = "precision_memory_percentage"
 CONF_PRECISION_NETWORK_KB = "precision_network_kb"
@@ -32,6 +33,7 @@ CONF_SWITCHENABLED = "switchenabled"
 CONF_SWITCHNAME = "switchname"
 CONF_BUTTONENABLED = "buttonenabled"
 CONF_BUTTONNAME = "buttonname"
+CONF_VERSION = "version"
 
 DEFAULT_NAME = "Docker"
 DEFAULT_RETRY = 60
@@ -43,6 +45,7 @@ DEFAULT_BUTTONNAME = "{name} Restart"
 COMPONENTS = ["sensor", "switch", "button"]
 
 SERVICE_RESTART = "restart"
+SERVICE_RELOAD = "reload"
 
 PRECISION = 2
 

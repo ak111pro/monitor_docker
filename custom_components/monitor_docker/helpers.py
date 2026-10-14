@@ -37,11 +37,13 @@ from .const import (
     CONF_CERTPATH,
     CONF_MEMORYCHANGE,
     CONF_PRECISION_CPU,
+    CONF_PRECISION_DISK_MB,
     CONF_PRECISION_MEMORY_MB,
     CONF_PRECISION_MEMORY_PERCENTAGE,
     CONF_PRECISION_NETWORK_KB,
     CONF_PRECISION_NETWORK_MB,
     CONF_RETRY,
+    CONF_VERSION,
     CONTAINER,
     CONTAINER_INFO_HEALTH,
     CONTAINER_INFO_IMAGE,
@@ -72,7 +74,7 @@ from .const import (
     PRECISION,
 )
 
-VERSION = "1.20b3"
+VERSION = "1.20"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,6 +109,8 @@ class DockerAPI:
         self._dockerStopped = False
         self._subscribers: list[Callable] = []
         self._api: aiodocker.Docker = None
+        # Event used to wake the poll loops for an on-demand refresh (reload service)
+        self._refresh_event: asyncio.Event = asyncio.Event()
 
         self._tcp_connector = None
         self._tcp_session = None
@@ -178,9 +182,10 @@ class DockerAPI:
                 url.find("tcp:") == 0
                 or url.find("http:") == 0
                 or url.find("https:") == 0
+                or url.find("ssh:") == 0
             ):
                 raise ValueError(
-                    f"[{self._instance}] Docker URL '{url}' does not start with tcp:, http: or https:"
+                    f"[{self._instance}] Docker URL '{url}' does not start with tcp:, http:, https: or ssh:"
                 )
 
             if self._config[CONF_CERTPATH] and url.find("http:") == 0:
@@ -231,6 +236,7 @@ class DockerAPI:
                 connector=self._tcp_connector,
                 session=self._tcp_session,
                 ssl_context=self._tcp_ssl_context,
+                api_version=self._config.get(CONF_VERSION, "auto"),
             )
 
             versionInfo = await self._api.version()
@@ -402,7 +408,7 @@ class DockerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers.clear()
 
     #############################################################
     def register_callback(self, callback: Callable, variable: str) -> None:
@@ -604,6 +610,32 @@ class DockerAPI:
                                 self._instance,
                                 oname,
                             )
+
+                    elif event["Action"] in (
+                        "start",
+                        "stop",
+                        "die",
+                        "kill",
+                        "oom",
+                        "pause",
+                        "unpause",
+                        "restart",
+                    ) or event["Action"].startswith("health_status"):
+                        # A container changed state or health without being added or
+                        # removed. The info/stats loops would otherwise only notice on
+                        # the next scan_interval, so trigger an immediate refresh to
+                        # update the entities and container counters right away.
+                        try:
+                            _cname = event["Actor"]["Attributes"]["name"]
+                        except (KeyError, TypeError):
+                            _cname = ""
+                        _LOGGER.debug(
+                            "[%s] %s: Event '%s' -> on-demand refresh",
+                            self._instance,
+                            _cname,
+                            event["Action"],
+                        )
+                        self.request_refresh()
 
         except Exception as err:
             exc_info = True if str(err) == "" else False
@@ -874,7 +906,7 @@ class DockerAPI:
             if error:
                 await asyncio.sleep(self._retry_interval)
             else:
-                await asyncio.sleep(self._interval)
+                await self._sleep_or_refresh(self._interval)
 
     #############################################################
     def list_containers(self):
@@ -898,6 +930,27 @@ class DockerAPI:
     def get_url(self) -> str:
         return self._config[CONF_URL]
 
+    #############################################################
+    def request_refresh(self) -> None:
+        """Wake the info loop and every container loop to fetch immediately."""
+        _LOGGER.debug("[%s]: On-demand refresh requested", self._instance)
+        # Each loop owns its event and clears it after waking, so a request is
+        # never lost even if a loop happens to be mid-fetch when it arrives
+        # (e.g. the rapid die+start events of a container restart).
+        self._refresh_event.set()
+        for container in list(self._containers.values()):
+            container.request_refresh()
+
+    #############################################################
+    async def _sleep_or_refresh(self, seconds: int) -> None:
+        """Sleep for 'seconds', but wake early if a refresh was requested."""
+        try:
+            await asyncio.wait_for(self._refresh_event.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._refresh_event.clear()
+
 
 #################################################################
 class DockerContainerAPI:
@@ -917,6 +970,7 @@ class DockerContainerAPI:
         self._name = cname
         self._interval: int = config[CONF_SCAN_INTERVAL]
         self._retry_interval: int = config[CONF_RETRY]
+        self._refresh_event: asyncio.Event = asyncio.Event()
         self._busy = False
         self._atInit = atInit
         self._task: asyncio.Task | None = None
@@ -1013,6 +1067,21 @@ class DockerContainerAPI:
             _LOGGER.error("[%s] %s: No task to cancel", self._instance, self._name)
 
     #############################################################
+    def request_refresh(self) -> None:
+        """Wake this container's loop to fetch immediately."""
+        self._refresh_event.set()
+
+    #############################################################
+    async def _sleep_or_refresh(self, seconds: int) -> None:
+        """Sleep for 'seconds', but wake early if a refresh was requested."""
+        try:
+            await asyncio.wait_for(self._refresh_event.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._refresh_event.clear()
+
+    #############################################################
     async def _run(self) -> None:
         """Loop to gather container info/stats."""
 
@@ -1039,13 +1108,12 @@ class DockerContainerAPI:
                 # No error, so normal interval
                 error = False
 
-            except concurrent.futures._base.CancelledError:
+            except (concurrent.futures._base.CancelledError, asyncio.CancelledError):
                 _LOGGER.debug(
-                    "[%s] %s: Container received concurrent.futures._base.CancelledError",
+                    "[%s] %s: Container task cancelled, stopping",
                     self._instance,
                     self._name,
                 )
-                pass
                 break
             except aiodocker.exceptions.DockerError as err:
                 _LOGGER.error(
@@ -1053,13 +1121,6 @@ class DockerContainerAPI:
                     self._instance,
                     self._name,
                     str(err),
-                    self._retry_interval,
-                )
-            except asyncio.exceptions.CancelledError as err:
-                _LOGGER.error(
-                    "[%s] %s: Container not available anymore (3c) CancelledError. Retry in %d seconds",
-                    self._instance,
-                    self._name,
                     self._retry_interval,
                 )
             except asyncio.TimeoutError as err:
@@ -1090,7 +1151,7 @@ class DockerContainerAPI:
             if error:
                 await asyncio.sleep(self._retry_interval)
             else:
-                await asyncio.sleep(self._interval)
+                await self._sleep_or_refresh(self._interval)
 
     #############################################################
     async def _run_container_info(self) -> None:
@@ -1174,6 +1235,7 @@ class DockerContainerAPI:
         stats["memory"] = {}
         stats["network"] = {}
         stats["read"] = {}
+        stats["disk"] = {}
 
         # Get container stats, only interested in [0]
         rawarr = await self._container.stats(stream=False)
@@ -1238,7 +1300,10 @@ class DockerContainerAPI:
                 )
                 if "cpu_stats" in raw:
                     _LOGGER.error(
-                        "[%s] %s: Raw 'cpu_stats' %s", self._name, raw["cpu_stats"]
+                        "[%s] %s: Raw 'cpu_stats' %s",
+                        self._instance,
+                        self._name,
+                        raw["cpu_stats"],
                     )
                 else:
                     _LOGGER.error(
@@ -1257,11 +1322,11 @@ class DockerContainerAPI:
 
             cache = 0
             # https://docs.docker.com/engine/reference/commandline/stats/
-            # Version is 19.04 or higher, don't use "cache"
-            if "total_inactive_file" in raw["memory_stats"]["stats"]:
-                cache = raw["memory_stats"]["stats"]["total_inactive_file"]
-            elif "inactive_file" in raw["memory_stats"]["stats"]:
-                cache = raw["memory_stats"]["stats"]["inactive_file"]
+            if "stats" in raw["memory_stats"]:
+                if "total_inactive_file" in raw["memory_stats"]["stats"]:
+                    cache = raw["memory_stats"]["stats"]["total_inactive_file"]
+                elif "inactive_file" in raw["memory_stats"]["stats"]:
+                    cache = raw["memory_stats"]["stats"]["inactive_file"]
 
             memory_stats["usage"] = toMB(
                 raw["memory_stats"]["usage"] - cache,
@@ -1396,6 +1461,25 @@ class DockerContainerAPI:
                         network_new["read"] - self._network_old["read"]
                     ).total_seconds()
 
+                    # Speed cannot be below zero
+                    if tx < 0:
+                        _LOGGER.warning(
+                            "[%s] %s: network tx became negative (%s)",
+                            self._instance,
+                            self._name,
+                            tx,
+                        )
+                        tx = 0
+
+                    if rx < 0:
+                        _LOGGER.warning(
+                            "[%s] %s: network rx became negative (%s)",
+                            self._instance,
+                            self._name,
+                            rx,
+                        )
+                        rx = 0
+
                     # Calculate speed, also convert to kByte/sec
                     network_stats["speed_tx"] = toKB(
                         float(tx) / tim, self._config[CONF_PRECISION_NETWORK_KB]
@@ -1421,6 +1505,7 @@ class DockerContainerAPI:
                     self._name,
                     str(err),
                 )
+
                 if "networks" in raw:
                     _LOGGER.error(
                         "[%s] %s: Raw 'networks' %s",
@@ -1446,10 +1531,38 @@ class DockerContainerAPI:
                     )
                     self._info[CONTAINER_INFO_NETWORK_AVAILABLE] = False
 
+        # Gather disk information
+        disk_stats: dict[str, float | None] = {}
+
+        try:
+            disk_stats["read"] = None
+            disk_stats["write"] = None
+
+            if (
+                "blkio_stats" in raw
+                and "io_service_bytes_recursive" in raw["blkio_stats"]
+            ):
+                for xarr in raw["blkio_stats"]["io_service_bytes_recursive"]:
+                    if "op" in xarr and xarr["op"] == "read":
+                        disk_stats["read"] = toMB(
+                            xarr["value"], self._config.get(CONF_PRECISION_DISK_MB, PRECISION)
+                        )
+                    if "op" in xarr and xarr["op"] == "write":
+                        disk_stats["write"] = toMB(
+                            xarr["value"], self._config.get(CONF_PRECISION_DISK_MB, PRECISION)
+                        )
+
+        except Exception as err:
+            #_LOGGER.error( "[%s] %s: Can not determine disk usage for container (%s)", self._instance, self._name, str(err),)
+            # Seems if no disk read/write is done, we get NoneType here
+            disk_stats["read"] = None
+            disk_stats["write"] = None
+
         # All information collected
         stats["cpu"] = cpu_stats
         stats["memory"] = memory_stats
         stats["network"] = network_stats
+        stats["disk"] = disk_stats
 
         stats[CONTAINER_STATS_CPU_PERCENTAGE] = cpu_stats.get("total")
         if "online_cpus" in cpu_stats and cpu_stats.get("total") is not None:
@@ -1503,7 +1616,7 @@ class DockerContainerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers.clear()
 
     #############################################################
     async def _start(self) -> None:

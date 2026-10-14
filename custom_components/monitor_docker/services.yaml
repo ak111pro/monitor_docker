@@ -7,3 +7,9 @@ restart:
     server:
       selector:
         text:
+reload:
+  name: Reload
+  description: >-
+    Force an immediate on-demand refresh of all monitored Docker data
+    (container state, stats and engine info) instead of waiting for the
+    next scan_interval.
