@@ -24,11 +24,17 @@
             "user": {
                 "description": "Setup a connection to docker host",
                 "data": {
-                    "name": "Name of Docker daemon",
-                    "url": "Host URL of Docker daemon",
+                    "name": "Name",
+                    "url": "Docker host URL",
                     "scan_interval": "Update interval (seconds)",
-                    "certpath": "If a TCP socket is used, you can define your Docker certificate path, forcing Monitor Docker to enable TLS. The filenames must be cert.pem and key.pem",
+                    "certpath": "Certificate path (TLS)",
                     "retry": "Retry interval (seconds)"
+                },
+                "data_description": {
+                    "name": "Name of this Docker host, also used as entity ID prefix.",
+                    "url": "Leave empty to use the local socket, e.g. unix:///var/run/docker.sock, or tcp://host:2376 for a remote host.",
+                    "certpath": "Only for TCP connections: folder with cert.pem and key.pem, enables TLS.",
+                    "retry": "Wait time before reconnecting after an error."
                 }
             },
             "reconfigure": {
@@ -41,14 +47,18 @@
             "containers": {
                 "description": "Select which containers to monitor",
                 "data": {
-                    "containers": "Array of containers to monitor (keep empty to add all, and new)",
-                    "containers_exclude": "Array of containers to be excluded from monitoring, when all containers are included"
+                    "containers": "Containers to monitor",
+                    "containers_exclude": "Containers to exclude"
+                },
+                "data_description": {
+                    "containers": "Leave empty to monitor all containers, including new ones.",
+                    "containers_exclude": "Used when all containers are monitored."
                 }
             },
             "containers_rename": {
                 "description": "Select a display name for each container",
                 "data": {
-                    "rename_entity": "If rename is done, it changes also the entity name"
+                    "rename_entity": "Rename entity IDs too"
                 }
             },
             "conditions": {
@@ -58,12 +68,15 @@
                     "monitored_container_conditions": "Conditions of each container to be monitored",
                     "switchenabled": "Enable/Disable the switch entity for containers",
                     "buttonenabled": "Enable/Disable the button entity for containers",
-                    "memorychange": "Change of memory usage before alerting",
+                    "memorychange": "Memory spike filter (%)",
                     "precision_cpu": "Precision of CPU usage percentage",
                     "precision_memory_mb": "Precision of memory usage in MB",
                     "precision_memory_percentage": "Precision of memory usage in percentage",
                     "precision_network_kb": "Precision of network bandwidth in kB",
                     "precision_network_mb": "Precision of network usage in MB"
+                },
+                "data_description": {
+                    "memorychange": "A memory change of at least this many percent between two readings is held back once, to filter short spikes. 100 = off."
                 }
             }
         },

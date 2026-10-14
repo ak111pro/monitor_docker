@@ -9,11 +9,17 @@
             "user": {
                 "description": "Verbindung zum Docker-Host einrichten",
                 "data": {
-                    "name": "Name des Docker-Daemons",
-                    "url": "Host-URL des Docker-Daemons",
+                    "name": "Name",
+                    "url": "Docker-Host-URL",
                     "scan_interval": "Aktualisierungsintervall (Sekunden)",
-                    "certpath": "Bei einem TCP-Socket kann ein Docker-Zertifikatspfad angegeben werden, dann wird TLS verwendet. Die Dateien müssen cert.pem und key.pem heißen",
+                    "certpath": "Zertifikatspfad (TLS)",
                     "retry": "Wiederholungsintervall (Sekunden)"
+                },
+                "data_description": {
+                    "name": "Name dieses Docker-Hosts, auch Präfix der Entitäts-IDs.",
+                    "url": "Leer lassen für den lokalen Socket, z. B. unix:///var/run/docker.sock, oder tcp://host:2376 für einen entfernten Host.",
+                    "certpath": "Nur für TCP-Verbindungen: Ordner mit cert.pem und key.pem, aktiviert TLS.",
+                    "retry": "Wartezeit bis zum erneuten Verbinden nach einem Fehler."
                 }
             },
             "reconfigure": {
@@ -26,14 +32,18 @@
             "containers": {
                 "description": "Container zur Überwachung auswählen",
                 "data": {
-                    "containers": "Zu überwachende Container (leer lassen für alle, auch neue)",
-                    "containers_exclude": "Auszuschließende Container, wenn alle überwacht werden"
+                    "containers": "Zu überwachende Container",
+                    "containers_exclude": "Auszuschließende Container"
+                },
+                "data_description": {
+                    "containers": "Leer lassen, um alle Container zu überwachen, auch neue.",
+                    "containers_exclude": "Wird genutzt, wenn alle Container überwacht werden."
                 }
             },
             "containers_rename": {
                 "description": "Anzeigenamen für jeden Container wählen",
                 "data": {
-                    "rename_entity": "Umbenennung ändert auch die Entitäts-ID"
+                    "rename_entity": "Auch Entitäts-IDs umbenennen"
                 }
             },
             "conditions": {
@@ -43,12 +53,15 @@
                     "monitored_container_conditions": "Werte je Container",
                     "switchenabled": "Schalter-Entitäten für Container",
                     "buttonenabled": "Neustart-Tasten für Container",
-                    "memorychange": "Speicheränderung bis zur Aktualisierung",
+                    "memorychange": "Speicher-Spitzenfilter (%)",
                     "precision_cpu": "Nachkommastellen CPU-Auslastung",
                     "precision_memory_mb": "Nachkommastellen Speicher in MB",
                     "precision_memory_percentage": "Nachkommastellen Speicher in Prozent",
                     "precision_network_kb": "Nachkommastellen Netzwerk-Bandbreite in kB",
                     "precision_network_mb": "Nachkommastellen Netzwerk-Nutzung in MB"
+                },
+                "data_description": {
+                    "memorychange": "Ändert sich der Speicher zwischen zwei Messungen um mindestens so viel Prozent, wird der Wert einmal zurückgehalten, um kurze Spitzen zu filtern. 100 = aus."
                 }
             }
         },
