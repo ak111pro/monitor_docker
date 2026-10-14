@@ -1,6 +1,7 @@
 """Monitor Docker button component."""
 
 import asyncio
+from collections.abc import Mapping
 import logging
 import re
 from typing import Any
@@ -31,6 +32,7 @@ from .const import (
     DOMAIN,
     SERVICE_RESTART,
 )
+from . import legacy_ids
 from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
 
 
@@ -148,6 +150,7 @@ async def async_setup_platform(
                         api.get_container(cname),
                         instance=instance,
                         cname=cname,
+                        config=config,
                     )
                 )
             else:
@@ -175,6 +178,7 @@ class DockerContainerButton(ButtonEntity, DockerContainerEntity):
         container: DockerContainerAPI,
         instance: str,
         cname: str,
+        config: Mapping[str, Any],
     ):
         super().__init__(container, instance, cname)
 
@@ -182,10 +186,13 @@ class DockerContainerButton(ButtonEntity, DockerContainerEntity):
         self._instance = instance
         self._cname = cname
         self._state = False
-        self._attr_unique_id = ENTITY_ID_FORMAT.format(
-            slugify(f"{self._instance}_{self._cname}_restart")
+        # unique_id as proposed in #212 (credit @lebdim); entity_id and name
+        # as in the YAML-only releases (see legacy_ids)
+        self._attr_unique_id = slugify(f"{self._instance}_{self._cname}_restart")
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            legacy_ids.button_object_id(config, instance, cname)
         )
-        self._attr_name = f"{self._instance} {self._cname} Restart"
+        self._attr_name = legacy_ids.button_name(config, cname)
         self._removed = False
 
     @property

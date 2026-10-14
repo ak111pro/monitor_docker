@@ -1,6 +1,7 @@
 """Monitor Docker switch component."""
 
 import asyncio
+from collections.abc import Mapping
 import logging
 import re
 from typing import Any
@@ -30,6 +31,7 @@ from .const import (
     DOMAIN,
     SERVICE_RESTART,
 )
+from . import legacy_ids
 from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
 
 
@@ -146,6 +148,7 @@ async def async_setup_platform(
                         api.get_container(cname),
                         instance=instance,
                         cname=cname,
+                        config=config,
                     )
                 )
             else:
@@ -173,6 +176,7 @@ class DockerContainerSwitch(SwitchEntity, DockerContainerEntity):
         container: DockerContainerAPI,
         instance: str,
         cname: str,
+        config: Mapping[str, Any],
     ):
         super().__init__(container, instance, cname)
 
@@ -181,10 +185,13 @@ class DockerContainerSwitch(SwitchEntity, DockerContainerEntity):
         self._cname = cname
         self._state = False
 
-        self._attr_unique_id: str = ENTITY_ID_FORMAT.format(
-            slugify(f"{self._instance}_{self._cname}")
+        # unique_id as proposed in #212 (credit @lebdim); entity_id and name
+        # as in the YAML-only releases (see legacy_ids)
+        self._attr_unique_id: str = slugify(f"{self._instance}_{self._cname}_switch")
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            legacy_ids.switch_object_id(config, instance, cname)
         )
-        self._name = f"{self._instance} {self._cname}"
+        self._name = legacy_ids.switch_name(config, cname)
         self._removed = False
 
     @property

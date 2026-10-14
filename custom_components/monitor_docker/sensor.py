@@ -1,6 +1,7 @@
 """Docker Monitor sensor component."""
 
 import asyncio
+from collections.abc import Mapping
 import logging
 import re
 from datetime import datetime
@@ -45,6 +46,7 @@ from .const import (
     DOCKER_MONITOR_LIST,
     DOMAIN,
 )
+from . import legacy_ids
 from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,7 +92,7 @@ async def async_setup_platform(
 
     sensors = []
     sensors: list[DockerSensor | DockerContainerSensor] = [
-        DockerSensor(api, instance, DOCKER_MONITOR_LIST[variable])
+        DockerSensor(api, instance, DOCKER_MONITOR_LIST[variable], config)
         for variable in config[CONF_MONITORED_CONDITIONS]
         if variable in DOCKER_MONITOR_LIST
         if CONTAINER not in discovery_info
@@ -152,6 +154,7 @@ async def async_setup_platform(
                         instance=instance,
                         cname=cname,
                         description=CONTAINER_MONITOR_LIST[CONTAINER_INFO_ALLINONE],
+                        config=config,
                         condition_list=monitor_conditions,
                     )
                 ]
@@ -170,6 +173,7 @@ async def async_setup_platform(
                                 instance=instance,
                                 cname=cname,
                                 description=CONTAINER_MONITOR_LIST[variable],
+                                config=config,
                             )
                         ]
 
@@ -193,6 +197,7 @@ class DockerSensor(SensorEntity):
         api: DockerAPI,
         instance: str,
         description: SensorEntityDescription,
+        config: Mapping[str, Any],
     ):
         """Initialize the sensor."""
 
@@ -204,7 +209,13 @@ class DockerSensor(SensorEntity):
         self._attr_unique_id: str = ENTITY_ID_FORMAT.format(
             slugify(f"{self._instance}_{self.entity_description.name}")
         )
-        self._attr_name = f"{self._instance} {self.entity_description.name}"
+        # Same entity_id and name as the YAML-only releases (see legacy_ids)
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            legacy_ids.docker_sensor_object_id(
+                config, instance, self.entity_description.name
+            )
+        )
+        self._attr_name = self.entity_description.name
 
         self._state = None
         self._attributes: dict[str, Any] = {}
@@ -285,6 +296,7 @@ class DockerContainerSensor(SensorEntity, DockerContainerEntity):
         instance: str,
         cname: str,
         description: SensorEntityDescription,
+        config: Mapping[str, Any],
         condition_list: list | None = None,
     ):
         """Initialize the sensor."""
@@ -301,14 +313,20 @@ class DockerContainerSensor(SensorEntity, DockerContainerEntity):
             self._attr_unique_id = ENTITY_ID_FORMAT.format(
                 slugify(f"{self._instance}_{self._cname}_allinone")
             )
-            self._attr_name = f"{self._instance} {self._cname} AllInOne".strip()
+            sensor_name = None
         else:
             self._attr_unique_id = ENTITY_ID_FORMAT.format(
                 slugify(f"{self._instance}_{cname}_{self.entity_description.name}")
             )
-            self._attr_name = (
-                f"{self._instance} {self._cname} {self.entity_description.name}".strip()
+            sensor_name = self.entity_description.name
+
+        # Same entity_id and name as the YAML-only releases (see legacy_ids)
+        self.entity_id = ENTITY_ID_FORMAT.format(
+            legacy_ids.container_sensor_object_id(
+                config, instance, cname, sensor_name
             )
+        )
+        self._attr_name = legacy_ids.container_sensor_name(config, cname, sensor_name)
 
         self._state = None
         self._state_extra = None
