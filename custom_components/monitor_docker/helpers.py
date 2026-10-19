@@ -699,6 +699,16 @@ class DockerAPI:
                         self._names.discard(oname)
                         self._names.add(cname)
 
+                        # A pending create of the old name is obsolete, the
+                        # container now has the new name
+                        if oname in self._event_create:
+                            _LOGGER.warning(
+                                "[%s] %s: Event rename received, but create wasn't executed yet",
+                                self._instance,
+                                oname,
+                            )
+                            del self._event_create[oname]
+
                         if oname in self._containers:
                             _LOGGER.debug(
                                 "[%s] %s: Event rename container to '%s'",
@@ -707,15 +717,8 @@ class DockerAPI:
                                 cname,
                             )
 
-                            # First remove the newly create container, has a temporary name
-                            if oname in self._event_create:
-                                _LOGGER.warning(
-                                    "[%s] %s: Event rename received, but create wasn't executed yet",
-                                    self._instance,
-                                    oname,
-                                )
-                                del self._event_create[cname]
-                            elif oname not in self._event_destroy:
+                            # First remove the monitor of the old name
+                            if oname not in self._event_destroy:
                                 _LOGGER.debug(
                                     "[%s] %s: Event rename (destroy) container",
                                     self._instance,

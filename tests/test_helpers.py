@@ -93,7 +93,9 @@ async def test_only_selected_containers_are_monitored(
 
 async def test_exclude_list_is_respected(make_api) -> None:
     """containers_exclude drops containers from an 'all containers' setup."""
-    api = await make_api(containers_exclude=["grafana"], monitored_conditions=["status"])
+    api = await make_api(
+        containers_exclude=["grafana"], monitored_conditions=["status"]
+    )
     await api.run()
     await settle()
 
@@ -446,3 +448,63 @@ async def test_info_timeout_is_logged(
 
     messages = [r.getMessage() for r in caplog.records]
     assert "[Docker]: run_docker_info () TCP Timeout. Retry in 60 seconds" in messages
+
+
+# --- Fix 5: rename event ------------------------------------------------------
+
+
+async def test_rename_with_pending_create(make_api, engine: FakeEngine) -> None:
+    """A rename of a name with a pending create must not end the event loop.
+
+    The old code deleted the *new* name from the pending creates (KeyError),
+    which ended the event task: no create/destroy/rename was handled anymore.
+    """
+    api = await make_api(
+        containers=["portainer", "renamed"], monitored_conditions=["status"]
+    )
+    await api.run()
+    await start_events(api)
+    await settle()
+
+    # a create of 'portainer' still waits in the working table
+    api._event_create["portainer"] = 0
+    engine.containers.by_name("portainer").name = "renamed"
+    engine.event("rename", "renamed", oldName="/portainer")
+    await settle()
+
+    assert not api._tasks["events"].done()
+    assert "portainer" not in api._event_create
+    assert "portainer" not in api.list_containers()
+    assert "renamed" in api.list_containers()
+
+    # events are still handled afterwards
+    engine.add("portainer")
+    engine.event("create", "portainer")
+    await settle()
+    assert "portainer" in api.list_containers()
+
+
+async def test_rename_of_monitored_container(make_api, engine: FakeEngine) -> None:
+    """compose recreate: the old container gets a temporary name."""
+    api = await make_api(containers=["portainer"], monitored_conditions=["status"])
+    await api.run()
+    await start_events(api)
+    await settle()
+    old = api.get_container("portainer")
+    removed = []
+    old.register_callback(lambda **kw: removed.append(kw), "test")
+
+    engine.containers.by_name("portainer").name = "1a2b3c_portainer"
+    engine.event("rename", "1a2b3c_portainer", oldName="/portainer")
+    await settle()
+    assert "portainer" not in api.list_containers()
+    assert "1a2b3c_portainer" not in api.list_containers()  # not selected
+    assert {"remove": True} in removed
+
+    engine.add("portainer")
+    engine.event("create", "portainer")
+    engine.remove("1a2b3c_portainer")
+    engine.event("destroy", "1a2b3c_portainer")
+    await settle()
+    assert api.get_container("portainer") is not old
+    assert not api._tasks["events"].done()
