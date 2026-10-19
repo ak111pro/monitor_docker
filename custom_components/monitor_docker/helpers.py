@@ -1103,6 +1103,7 @@ class DockerAPI:
                 _LOGGER.error(
                     "[%s]: run_docker_info (%s) TCP Timeout. Retry in %d seconds",
                     self._instance,
+                    str(err),
                     self._retry_interval,
                 )
             except Exception as err:
@@ -1865,9 +1866,9 @@ class DockerContainerAPI:
                 if "networks" in raw:
                     _LOGGER.error(
                         "[%s] %s: Raw 'networks' %s",
-                        raw["networks"],
                         self._instance,
                         self._name,
+                        raw["networks"],
                     )
                 else:
                     _LOGGER.error(

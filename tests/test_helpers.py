@@ -400,3 +400,49 @@ async def test_stats_404_is_raised(engine: FakeEngine) -> None:
     with pytest.raises(helpers.aiodocker.exceptions.DockerError) as err:
         await helpers.fetch_stats(container)
     assert err.value.status == 404
+
+
+# --- Fix 4: logging arguments -------------------------------------------------
+
+
+def test_log_calls_have_matching_arguments() -> None:
+    """Every _LOGGER call passes as many arguments as its format expects."""
+    import ast
+    import re
+    from pathlib import Path
+
+    package = Path(helpers.__file__).parent
+    problems = []
+    for path in sorted(package.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "_LOGGER"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                continue
+            expected = len(re.findall(r"%[sdfr]", node.args[0].value.replace("%%", "")))
+            if expected != len(node.args) - 1:
+                problems.append(f"{path.name}:{node.lineno}")
+    assert problems == []
+
+
+async def test_info_timeout_is_logged(
+    make_api, engine: FakeEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The TCP timeout message of the info loop formats without an error."""
+    api = await make_api(monitored_conditions=["version"])
+
+    async def timeout() -> None:
+        raise TimeoutError
+
+    engine.system.info = timeout
+    api._tasks["info"] = asyncio.create_task(api._run_docker_info())
+    await settle(3)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert "[Docker]: run_docker_info () TCP Timeout. Retry in 60 seconds" in messages
