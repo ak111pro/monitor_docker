@@ -5,6 +5,7 @@ import concurrent
 import logging
 import os
 import ssl
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -155,8 +156,47 @@ def memory_usage(raw: dict[str, Any], precision: int) -> float:
     return toMB(raw["memory_stats"]["usage"] - cache, precision)
 
 
+# Docker clients whose daemon rejected the one-shot stats parameter
+_ONE_SHOT_UNSUPPORTED: "weakref.WeakSet[aiodocker.Docker]" = weakref.WeakSet()
+
+# The 'one-shot' stats parameter exists since Docker API 1.41 (Engine 20.10)
+ONE_SHOT_MIN_API = (1, 41)
+
+
+def _one_shot_supported(docker: aiodocker.Docker) -> bool:
+    """True unless the API version is known to be older than 1.41."""
+    if docker in _ONE_SHOT_UNSUPPORTED:
+        return False
+    version = str(getattr(docker, "api_version", "auto")).lstrip("v")
+    try:
+        major, minor = (int(part) for part in version.split(".")[:2])
+    except ValueError:
+        return True  # "auto" before the first call: the daemon decides
+    return (major, minor) >= ONE_SHOT_MIN_API
+
+
 async def fetch_stats(container: aiodocker.containers.DockerContainer) -> dict:
-    """Return one raw stats sample of a container (empty dict if none)."""
+    """Return one raw stats sample of a container (empty dict if none).
+
+    A plain stats(stream=False) call makes the daemon collect two samples one
+    second apart (~1.5 s per call) to fill precpu_stats. We compute CPU usage
+    from our own previous sample, so one-shot=true is enough (a few ms).
+    """
+    docker = container.docker
+    if _one_shot_supported(docker):
+        try:
+            raw = await docker._query_json(
+                f"containers/{container._id}/stats",
+                params={"stream": "0", "one-shot": "1"},
+            )
+        except aiodocker.exceptions.DockerError as err:
+            if err.status != 400:
+                raise
+            _LOGGER.info("Docker API does not support one-shot stats (%s)", err)
+            _ONE_SHOT_UNSUPPORTED.add(docker)
+        else:
+            return raw if isinstance(raw, dict) else {}
+
     rawarr = await container.stats(stream=False)
     # Could be out-of-range when stopping/renaming
     return rawarr[0] if rawarr else {}

@@ -349,3 +349,54 @@ async def test_create_event_replaces_stale_monitor(
     assert fresh is not stale
     assert fresh._container is new
     assert stale._task.cancelled() or stale._task.done()
+
+
+# --- Fix 3: one-shot stats ----------------------------------------------------
+
+
+async def test_stats_use_one_shot(make_api, engine: FakeEngine) -> None:
+    """Monitors and host totals ask the daemon for a single sample."""
+    api = await make_api(
+        containers=["portainer"],
+        monitored_conditions=["containers_1cpu_percentage", "1cpu_percentage"],
+    )
+    await api.run()
+    await settle()
+
+    assert engine.queries
+    for path, params in engine.queries:
+        assert path.endswith("/stats")
+        assert params == {"stream": "0", "one-shot": "1"}
+    assert engine.slow_stats_calls == 0
+    assert engine.containers.by_name("portainer").stats_calls >= 1
+
+
+async def test_stats_fall_back_without_one_shot(engine: FakeEngine) -> None:
+    """A daemon that rejects one-shot gets the classic call, asked only once."""
+    engine.one_shot_status = 400
+    container = engine.containers.by_name("portainer")
+
+    first = await helpers.fetch_stats(container)
+    second = await helpers.fetch_stats(container)
+
+    assert first["cpu_stats"] and second["cpu_stats"]
+    assert len(engine.queries) == 1
+    assert engine.slow_stats_calls == 2
+
+
+async def test_stats_old_api_skips_one_shot(engine: FakeEngine) -> None:
+    """Before Docker API 1.41 the parameter does not exist."""
+    engine.api_version = "v1.40"
+    raw = await helpers.fetch_stats(engine.containers.by_name("portainer"))
+
+    assert raw["memory_stats"]
+    assert engine.queries == []
+    assert engine.slow_stats_calls == 1
+
+
+async def test_stats_404_is_raised(engine: FakeEngine) -> None:
+    """A vanished container is still reported to the poll loop."""
+    container = engine.remove("portainer")
+    with pytest.raises(helpers.aiodocker.exceptions.DockerError) as err:
+        await helpers.fetch_stats(container)
+    assert err.value.status == 404

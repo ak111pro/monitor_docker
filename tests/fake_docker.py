@@ -79,9 +79,15 @@ class FakeContainer:
             "networks": {"eth0": {"rx_bytes": 1000, "tx_bytes": 2000}},
         }
 
+    @property
+    def docker(self) -> FakeEngine:
+        return self.engine
+
     async def stats(self, *, stream: bool = True, timeout: Any = None):
+        """The slow path: the daemon samples twice, one second apart."""
         self._check()
         self.stats_calls += 1
+        self.engine.slow_stats_calls += 1
         return [self.sample()]
 
 
@@ -157,6 +163,10 @@ class FakeEngine:
         self.events = FakeEvents()
         self.system_cpu = 10_000_000_000
         self.clock = 0
+        self.queries: list[tuple[str, dict]] = []
+        self.slow_stats_calls = 0
+        # HTTP status the daemon answers a one-shot request with (None = OK)
+        self.one_shot_status: int | None = None
         self.api_version = "v1.52"
         for name in names:
             self.add(name)
@@ -164,6 +174,21 @@ class FakeEngine:
     # aiodocker.Docker(...) is replaced by the engine itself
     def __call__(self, *args: Any, **kwargs: Any) -> FakeEngine:
         return self
+
+    async def _query_json(
+        self, path: str, method: str = "GET", *, params: Any = None, **kw: Any
+    ) -> Any:
+        """Only the stats endpoint of a container, like aiodocker's helper."""
+        self.queries.append((path, dict(params or {})))
+        _, cid, endpoint = path.split("/")
+        assert endpoint == "stats"
+        if self.one_shot_status is not None and "one-shot" in (params or {}):
+            raise DockerError(self.one_shot_status, "unknown parameter one-shot")
+        container = self.containers.by_id.get(cid)
+        if container is None:
+            raise DockerError(404, f"No such container: {cid}")
+        container.stats_calls += 1
+        return container.sample()
 
     async def version(self) -> dict[str, Any]:
         return {"Version": "29.9.0", "ApiVersion": "1.52"}
