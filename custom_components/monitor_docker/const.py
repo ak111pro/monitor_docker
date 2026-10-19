@@ -61,6 +61,14 @@ DOCKER_STATS_1CPU_PERCENTAGE = "containers_1cpu_percentage"
 DOCKER_STATS_MEMORY = "containers_memory"
 DOCKER_STATS_MEMORY_PERCENTAGE = "containers_memory_percentage"
 
+# Host sensors summed over every running container, selected or not
+DOCKER_AGGREGATE_LIST = [
+    DOCKER_STATS_CPU_PERCENTAGE,
+    DOCKER_STATS_1CPU_PERCENTAGE,
+    DOCKER_STATS_MEMORY,
+    DOCKER_STATS_MEMORY_PERCENTAGE,
+]
+
 DOCKER_PRE_SELECTION = [
     DOCKER_INFO_VERSION,
     DOCKER_INFO_CONTAINER_RUNNING,

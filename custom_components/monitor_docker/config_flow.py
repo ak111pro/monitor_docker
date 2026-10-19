@@ -220,7 +220,12 @@ class DockerConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_CONTAINERS, default=self.data[CONF_CONTAINERS]
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=list(self._docker_api.list_containers()),
+                        # Every container on the host, plus selected ones
+                        # that do not exist right now
+                        options=sorted(
+                            set(self._docker_api.list_all_containers())
+                            | set(self.data[CONF_CONTAINERS])
+                        ),
                         multiple=True,
                     ),
                 )

@@ -24,7 +24,6 @@ from .const import (
     ATTR_NAME,
     ATTR_SERVER,
     CONF_CONTAINERS,
-    CONF_CONTAINERS_EXCLUDE,
     CONF_RENAME,
     CONF_BUTTONENABLED,
     CONFIG,
@@ -34,7 +33,12 @@ from .const import (
     SERVICE_RESTART,
 )
 from . import legacy_ids
-from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
+from .helpers import (
+    DockerAPI,
+    DockerContainerAPI,
+    DockerContainerEntity,
+    is_container_selected,
+)
 
 
 SERVICE_RESTART_SCHEMA = vol.Schema(
@@ -132,14 +136,7 @@ async def async_setup_platform(
         clist = api.list_containers()
 
     for cname in clist:
-        includeContainer = False
-        if cname in config[CONF_CONTAINERS] or not config[CONF_CONTAINERS]:
-            includeContainer = True
-
-        if config[CONF_CONTAINERS_EXCLUDE] and cname in config[CONF_CONTAINERS_EXCLUDE]:
-            includeContainer = False
-
-        if includeContainer:
+        if is_container_selected(config, cname):
             if (
                 config[CONF_BUTTONENABLED] == True
                 or cname in config[CONF_BUTTONENABLED]

@@ -46,6 +46,7 @@ def mock_docker_api() -> Generator[MagicMock]:
         api.run = AsyncMock()
         api.destroy = AsyncMock()
         api.list_containers.return_value = list(containers)
+        api.list_all_containers.return_value = list(containers)
         api.get_container.side_effect = containers.get
         api.get_info.return_value = {}
         api.get_url.return_value = "unix:///var/run/docker.sock"

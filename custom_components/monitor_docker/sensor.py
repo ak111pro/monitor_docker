@@ -29,8 +29,6 @@ from .const import (
     ATTR_VERSION_KERNEL,
     ATTR_VERSION_OS,
     ATTR_VERSION_OS_TYPE,
-    CONF_CONTAINERS,
-    CONF_CONTAINERS_EXCLUDE,
     CONFIG,
     CONTAINER,
     CONTAINER_INFO_ALLINONE,
@@ -48,7 +46,12 @@ from .const import (
     DOMAIN,
 )
 from . import legacy_ids
-from .helpers import DockerAPI, DockerContainerAPI, DockerContainerEntity
+from .helpers import (
+    DockerAPI,
+    DockerContainerAPI,
+    DockerContainerEntity,
+    is_container_selected,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,14 +120,7 @@ async def async_setup_platform(
             config[CONF_MONITORED_CONDITIONS].remove(CONTAINER_INFO_STATE)
 
     for cname in clist:
-        includeContainer = False
-        if cname in config[CONF_CONTAINERS] or not config[CONF_CONTAINERS]:
-            includeContainer = True
-
-        if config[CONF_CONTAINERS_EXCLUDE] and cname in config[CONF_CONTAINERS_EXCLUDE]:
-            includeContainer = False
-
-        if includeContainer:
+        if is_container_selected(config, cname):
             # Try to figure out if we should include any network sensors
             capi = api.get_container(cname)
             info = capi.get_info()

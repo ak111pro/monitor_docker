@@ -126,3 +126,33 @@ async def test_reconfigure_preselects_and_updates(
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["monitored_conditions"] == ["version", "memory", "status"]
     live_api.destroy.assert_awaited()  # reload unloads the old instance
+
+
+async def test_reconfigure_lists_every_container(
+    hass: HomeAssistant, mock_docker_api
+) -> None:
+    """Only selected containers are monitored, but all can be selected."""
+    assert await async_setup_component(
+        hass,
+        DOMAIN,
+        {DOMAIN: [{"name": "Docker", "containers": ["esphome", "not-created-yet"]}]},
+    )
+    await hass.async_block_till_done()
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    live_api = hass.data[DOMAIN]["Docker"][API]
+    live_api.list_containers.return_value = ["esphome"]
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "containers"}
+    )
+    assert result["step_id"] == "containers"
+    selector = result["data_schema"].schema["containers"]
+    assert selector.config["options"] == [
+        "esphome",
+        "homeassistant",
+        "not-created-yet",
+        "portainer",
+    ]

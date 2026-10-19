@@ -19,6 +19,7 @@ from dateutil import parser, relativedelta
 from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
+    CONF_MONITORED_CONDITIONS,
     CONF_NAME,
     CONF_SCAN_INTERVAL,
     CONF_URL,
@@ -37,6 +38,8 @@ from .const import (
     ATTR_VERSION_OS_TYPE,
     COMPONENTS,
     CONF_CERTPATH,
+    CONF_CONTAINERS,
+    CONF_CONTAINERS_EXCLUDE,
     CONF_MEMORYCHANGE,
     CONF_PRECISION_CPU,
     CONF_PRECISION_DISK_MB,
@@ -68,6 +71,7 @@ from .const import (
     DOCKER_INFO_CONTAINER_TOTAL,
     DOCKER_INFO_IMAGES,
     DOCKER_INFO_VERSION,
+    DOCKER_AGGREGATE_LIST,
     DOCKER_STATS_1CPU_PERCENTAGE,
     DOCKER_STATS_CPU_PERCENTAGE,
     DOCKER_STATS_MEMORY,
@@ -96,6 +100,68 @@ def toMB(value: float, precision: int = PRECISION) -> float:
     return round(value / (1024**2), precision)
 
 
+def is_container_selected(config: ConfigType, cname: str) -> bool:
+    """Return True when the container gets entities (containers/containers_exclude)."""
+    containers = config.get(CONF_CONTAINERS) or []
+    if containers and cname not in containers:
+        return False
+    return cname not in (config.get(CONF_CONTAINERS_EXCLUDE) or [])
+
+
+def needs_all_containers(config: ConfigType) -> bool:
+    """Return True when a host sensor sums the stats of every container."""
+    conditions = config.get(CONF_MONITORED_CONDITIONS) or []
+    return any(condition in conditions for condition in DOCKER_AGGREGATE_LIST)
+
+
+def cpu_counters(raw: dict[str, Any]) -> dict[str, int]:
+    """Return the cumulative CPU counters of a raw stats sample."""
+    return {
+        "total": raw["cpu_stats"]["cpu_usage"]["total_usage"],
+        "system": raw["cpu_stats"]["system_cpu_usage"],
+    }
+
+
+def online_cpus(raw: dict[str, Any]) -> int:
+    """Return the number of CPUs of a raw stats sample."""
+    # Compatibility wih older Docker API
+    if "online_cpus" in raw["cpu_stats"]:
+        return raw["cpu_stats"]["online_cpus"]
+    return len(raw["cpu_stats"]["cpu_usage"]["percpu_usage"] or [])
+
+
+def cpu_percentage(
+    new: dict[str, int], old: dict[str, int], cpus: int, precision: int
+) -> float:
+    """CPU usage between two samples, 100% per CPU (like docker stats)."""
+    cpu_delta = float(new["total"] - old["total"])
+    system_delta = float(new["system"] - old["system"])
+
+    if cpu_delta > 0.0 and system_delta > 0.0:
+        return round((cpu_delta / system_delta) * float(cpus) * 100.0, precision)
+    return round(0.0, PRECISION)
+
+
+def memory_usage(raw: dict[str, Any], precision: int) -> float:
+    """Memory usage in MB without the inactive page cache (like docker stats)."""
+    cache = 0
+    # https://docs.docker.com/engine/reference/commandline/stats/
+    if "stats" in raw["memory_stats"]:
+        if "total_inactive_file" in raw["memory_stats"]["stats"]:
+            cache = raw["memory_stats"]["stats"]["total_inactive_file"]
+        elif "inactive_file" in raw["memory_stats"]["stats"]:
+            cache = raw["memory_stats"]["stats"]["inactive_file"]
+
+    return toMB(raw["memory_stats"]["usage"] - cache, precision)
+
+
+async def fetch_stats(container: aiodocker.containers.DockerContainer) -> dict:
+    """Return one raw stats sample of a container (empty dict if none)."""
+    rawarr = await container.stats(stream=False)
+    # Could be out-of-range when stopping/renaming
+    return rawarr[0] if rawarr else {}
+
+
 #################################################################
 class DockerAPI:
     """Docker API abstraction allowing multiple Docker instances beeing monitored."""
@@ -106,7 +172,14 @@ class DockerAPI:
         self._hass = hass
         self._config = config
         self._instance: str = config[CONF_NAME]
+        # Monitors of the containers that get entities (see is_container_selected)
         self._containers: dict[str, DockerContainerAPI] = {}
+        # Names of all containers on the host (selection lists of the config flow)
+        self._names: set[str] = set()
+        # Host sensors summing every container need stats of the others too
+        self._aggregate: bool = needs_all_containers(config)
+        # CPU counters of the containers without a monitor, by container id
+        self._aggregate_cpu_old: dict[str, dict[str, int]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._info: dict[str, Any] = {}
         self._event_create: dict[str, int] = {}
@@ -261,12 +334,16 @@ class DockerAPI:
         containers = await self._api.containers.list(all=True)
 
         # We only store names, we do not initialize them. This happens in run()
+        self._names = set()
         for container in containers or []:
             # Determine name from Docker API, it contains an array with a slash
             cname: str = container._container["Names"][0][1:]
+            self._names.add(cname)
 
-            # Add container name to the list
-            self._containers[cname] = None
+            # Only containers that get entities are monitored one by one. The
+            # host totals of the others are sampled by _run_docker_info.
+            if is_container_selected(self._config, cname):
+                self._containers[cname] = None
 
     #############################################################
     async def run(self):
@@ -287,9 +364,6 @@ class DockerAPI:
             # Skip already initialized containers
             if self._containers[cname]:
                 continue
-
-            # We will monitor all containers, including excluded ones.
-            # This is needed to get total CPU/Memory usage.
 
             _LOGGER.debug("[%s] %s: Container monitored", self._instance, cname)
 
@@ -502,10 +576,17 @@ class DockerAPI:
                         )
 
                         cname = event["Actor"]["Attributes"]["name"]
+                        self._names.add(cname)
 
                         # Add container name to containers to be monitored this has to
                         # be a new task, otherwise it will block our event monitoring
-                        if cname not in self._event_create:
+                        if not is_container_selected(self._config, cname):
+                            _LOGGER.debug(
+                                "[%s] %s: Event create container, not selected",
+                                self._instance,
+                                cname,
+                            )
+                        elif cname not in self._event_create:
                             _LOGGER.debug(
                                 "[%s] %s: Event create container", self._instance, cname
                             )
@@ -527,6 +608,7 @@ class DockerAPI:
                         )
 
                         cname = event["Actor"]["Attributes"]["name"]
+                        self._names.discard(cname)
 
                         # Remove container name to containers to be monitored this has to
                         # be a new task, otherwise it will block our event monitoring
@@ -537,6 +619,12 @@ class DockerAPI:
                                 cname,
                             )
                             del self._event_create[cname]
+                        elif cname not in self._containers:
+                            _LOGGER.debug(
+                                "[%s] %s: Event destroy container, not monitored",
+                                self._instance,
+                                cname,
+                            )
                         elif cname not in self._event_destroy:
                             _LOGGER.debug(
                                 "[%s] %s: Event destroy container",
@@ -562,6 +650,9 @@ class DockerAPI:
                         # Old name, and remove leading slash
                         oname = event["Actor"]["Attributes"]["oldName"]
                         oname = oname[1:]
+
+                        self._names.discard(oname)
+                        self._names.add(cname)
 
                         if oname in self._containers:
                             _LOGGER.debug(
@@ -596,7 +687,9 @@ class DockerAPI:
                             if self._event_destroy:
                                 await self._container_create_destroy()
 
-                            # Second re-add the container with the original name
+                        # Second re-add the container under its new name, when that
+                        # name is selected (e.g. 'docker rename' to a selected name)
+                        if is_container_selected(self._config, cname):
                             taskcreated = (
                                 True
                                 if self._event_create or self._event_destroy
@@ -619,11 +712,12 @@ class DockerAPI:
 
                             if self._event_create and not taskcreated:
                                 await self._container_create_destroy()
-                        else:
-                            _LOGGER.error(
-                                "[%s] %s: Event rename container doesn't exist in list?",
+                        elif oname not in self._containers:
+                            _LOGGER.debug(
+                                "[%s] %s: Event rename container to '%s', not selected",
                                 self._instance,
                                 oname,
+                                cname,
                             )
 
                     elif event["Action"] in (
@@ -696,6 +790,10 @@ class DockerAPI:
 
     #############################################################
     async def _container_add(self, cname: str) -> None:
+        if not is_container_selected(self._config, cname):
+            _LOGGER.debug("[%s] %s: Container not selected", self._instance, cname)
+            return
+
         if cname in self._containers:
             _LOGGER.error("[%s] %s: Container already monitored", self._instance, cname)
             return
@@ -731,9 +829,10 @@ class DockerAPI:
     async def _container_remove(self, cname: str) -> None:
         if cname in self._containers:
             _LOGGER.debug("[%s] %s: Stopping Container Monitor", self._instance, cname)
-            self._containers[cname].cancel_task()
-            self._containers[cname].remove_entities()
-            await asyncio.sleep(0.1)
+            if self._containers[cname] is not None:
+                self._containers[cname].cancel_task()
+                self._containers[cname].remove_entities()
+                await asyncio.sleep(0.1)
             del self._containers[cname]
         else:
             _LOGGER.error("[%s] %s: Container is NOT monitored", self._instance, cname)
@@ -777,7 +876,7 @@ class DockerAPI:
                 self._info[DOCKER_STATS_MEMORY] = 0
                 self._info[DOCKER_STATS_MEMORY_PERCENTAGE] = 0.0
 
-                # Now go through all containers and get the cpu/memory stats
+                # Now go through all monitored containers and get the cpu/memory stats
                 for container in self._containers.values():
                     if container is None:
                         # Still being set up by run(); counted in the next pass
@@ -806,6 +905,12 @@ class DockerAPI:
                             str(err),
                             exc_info=exc_info,
                         )
+
+                # Add the containers without a monitor of their own
+                if self._aggregate:
+                    cpu, memory = await self._unmonitored_usage()
+                    self._info[DOCKER_STATS_CPU_PERCENTAGE] += cpu
+                    self._info[DOCKER_STATS_MEMORY] += memory
 
                 # Calculate memory percentage
                 if (
@@ -926,8 +1031,76 @@ class DockerAPI:
                 await self._sleep_or_refresh(self._interval)
 
     #############################################################
+    async def _unmonitored_usage(self) -> tuple[float, float]:
+        """Sum CPU % and memory MB of the running containers without a monitor.
+
+        Only needed for the host sensors that add up all containers. One list
+        call plus one stats call per container, instead of a monitor polling
+        show() and stats() for every container on the host.
+        """
+        running = await self._api.containers.list()
+
+        containers = []
+        for container in running or []:
+            raw = container._container
+            cname = raw["Names"][0][1:]
+            if cname in self._containers or raw.get("State") != "running":
+                continue
+            containers.append(container)
+
+        results = await asyncio.gather(
+            *(fetch_stats(container) for container in containers),
+            return_exceptions=True,
+        )
+
+        cpu_total = 0.0
+        memory_total = 0.0
+        cpu_old = self._aggregate_cpu_old
+        self._aggregate_cpu_old = {}
+
+        for container, raw in zip(containers, results):
+            if isinstance(raw, BaseException) or not raw:
+                # Gone in between (404) or no sample yet, counted next time
+                _LOGGER.debug(
+                    "[%s] %s: No stats for host totals (%s)",
+                    self._instance,
+                    container._container["Names"][0][1:],
+                    raw,
+                )
+                continue
+
+            cid = container._container["Id"]
+            try:
+                cpu_new = cpu_counters(raw)
+                if cid in cpu_old:
+                    cpu_total += cpu_percentage(
+                        cpu_new,
+                        cpu_old[cid],
+                        online_cpus(raw),
+                        self._config[CONF_PRECISION_CPU],
+                    )
+                self._aggregate_cpu_old[cid] = cpu_new
+            except (KeyError, TypeError):
+                pass
+
+            try:
+                memory_total += memory_usage(
+                    raw, self._config[CONF_PRECISION_MEMORY_MB]
+                )
+            except (KeyError, TypeError):
+                pass
+
+        return cpu_total, memory_total
+
+    #############################################################
     def list_containers(self):
+        """Names of the monitored containers, the ones that get entities."""
         return self._containers.keys()
+
+    #############################################################
+    def list_all_containers(self) -> list[str]:
+        """Names of all containers on the host, monitored or not."""
+        return sorted(self._names)
 
     #############################################################
     def get_container(self, cname: str) -> "DockerContainerAPI":
@@ -956,7 +1129,8 @@ class DockerAPI:
         # (e.g. the rapid die+start events of a container restart).
         self._refresh_event.set()
         for container in list(self._containers.values()):
-            container.request_refresh()
+            if container is not None:
+                container.request_refresh()
 
     #############################################################
     async def _sleep_or_refresh(self, seconds: int) -> None:
@@ -1254,13 +1428,9 @@ class DockerContainerAPI:
         stats["read"] = {}
         stats["disk"] = {}
 
-        # Get container stats, only interested in [0]
-        rawarr = await self._container.stats(stream=False)
-
-        # Could be out-of-range when stopping/renaming
-        try:
-            raw: dict[str, Any] = rawarr[0]
-        except IndexError:
+        # Get container stats
+        raw: dict[str, Any] = await fetch_stats(self._container)
+        if not raw:
             return
 
         stats["read"] = parser.parse(raw["read"])
@@ -1268,31 +1438,17 @@ class DockerContainerAPI:
         # Gather CPU information
         cpu_stats = {}
         try:
-            cpu_new = {}
-            cpu_new["total"] = raw["cpu_stats"]["cpu_usage"]["total_usage"]
-            cpu_new["system"] = raw["cpu_stats"]["system_cpu_usage"]
-
-            # Compatibility wih older Docker API
-            if "online_cpus" in raw["cpu_stats"]:
-                cpu_stats["online_cpus"] = raw["cpu_stats"]["online_cpus"]
-            else:
-                cpu_stats["online_cpus"] = len(
-                    raw["cpu_stats"]["cpu_usage"]["percpu_usage"] or []
-                )
+            cpu_new = cpu_counters(raw)
+            cpu_stats["online_cpus"] = online_cpus(raw)
 
             # Calculate cpu usage, but first iteration we don't know it
             if self._cpu_old:
-                cpu_delta = float(cpu_new["total"] - self._cpu_old["total"])
-                system_delta = float(cpu_new["system"] - self._cpu_old["system"])
-
-                cpu_stats["total"] = round(0.0, PRECISION)
-                if cpu_delta > 0.0 and system_delta > 0.0:
-                    cpu_stats["total"] = round(
-                        (cpu_delta / system_delta)
-                        * float(cpu_stats["online_cpus"])
-                        * 100.0,
-                        self._config[CONF_PRECISION_CPU],
-                    )
+                cpu_stats["total"] = cpu_percentage(
+                    cpu_new,
+                    self._cpu_old,
+                    cpu_stats["online_cpus"],
+                    self._config[CONF_PRECISION_CPU],
+                )
 
             self._cpu_old = cpu_new
 
@@ -1336,18 +1492,8 @@ class DockerContainerAPI:
 
         try:
             memory_stats["usage"] = None
-
-            cache = 0
-            # https://docs.docker.com/engine/reference/commandline/stats/
-            if "stats" in raw["memory_stats"]:
-                if "total_inactive_file" in raw["memory_stats"]["stats"]:
-                    cache = raw["memory_stats"]["stats"]["total_inactive_file"]
-                elif "inactive_file" in raw["memory_stats"]["stats"]:
-                    cache = raw["memory_stats"]["stats"]["inactive_file"]
-
-            memory_stats["usage"] = toMB(
-                raw["memory_stats"]["usage"] - cache,
-                self._config[CONF_PRECISION_MEMORY_MB],
+            memory_stats["usage"] = memory_usage(
+                raw, self._config[CONF_PRECISION_MEMORY_MB]
             )
             memory_stats["limit"] = toMB(
                 raw["memory_stats"]["limit"], self._config[CONF_PRECISION_MEMORY_MB]
