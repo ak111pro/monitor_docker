@@ -248,3 +248,104 @@ async def test_events_follow_the_selection(make_api, engine: FakeEngine) -> None
     await settle()
     assert "md-new" in api.list_containers()
     assert "md-new-tmp" not in api.list_containers()
+
+
+# --- Fix 2: stale monitors (#166, #188) ---------------------------------------
+
+
+async def test_failed_start_leaves_no_stale_monitor(
+    make_api, engine: FakeEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A create event for a container that is gone again leaves nothing behind."""
+    api = await make_api(
+        containers=["portainer", "md-new"], monitored_conditions=["status"]
+    )
+    await api.run()
+    await start_events(api)
+
+    # created and removed again before the monitor could attach
+    engine.event("create", "md-new")
+    await settle()
+    assert "md-new" not in api.list_containers()
+    assert "Problem during start of monitoring" in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+    # the next container of that name is monitored again (was: "already
+    # monitored" forever)
+    engine.add("md-new")
+    engine.event("create", "md-new")
+    await settle()
+    assert "md-new" in api.list_containers()
+    assert engine.containers.by_name("md-new").show_calls >= 1
+
+
+async def test_recreated_container_is_reattached(make_api, engine: FakeEngine) -> None:
+    """Recreated without events (#188): the monitor re-attaches by name."""
+    api = await make_api(containers=["portainer"], monitored_conditions=["status"])
+    await api.run()
+    await settle()
+    monitor = api.get_container("portainer")
+    old = engine.containers.by_name("portainer")
+
+    engine.remove("portainer")
+    new = engine.add("portainer")
+    monitor.request_refresh()
+    await settle()
+
+    assert api.get_container("portainer") is monitor
+    assert monitor._container is new
+    assert new.show_calls >= 1
+    assert old.id != new.id
+
+
+async def test_vanished_container_monitor_is_dropped(
+    make_api, engine: FakeEngine
+) -> None:
+    """Gone without a destroy event: the monitor is removed after two tries."""
+    api = await make_api(containers=["portainer"], monitored_conditions=["status"])
+    await api.run()
+    await start_events(api)
+    await settle()
+    monitor = api.get_container("portainer")
+    removed = []
+    monitor.register_callback(lambda **kw: removed.append(kw), "test")
+
+    engine.remove("portainer")
+    monitor.request_refresh()
+    await settle(40)
+
+    assert "portainer" not in api.list_containers()
+    assert {"remove": True} in removed
+
+    # and it comes back with the next create event
+    engine.add("portainer")
+    engine.event("create", "portainer")
+    await settle()
+    assert "portainer" in api.list_containers()
+
+
+async def test_create_event_replaces_stale_monitor(
+    make_api, engine: FakeEngine
+) -> None:
+    """A create event for a monitored name with a new id replaces the monitor."""
+    api = await make_api(containers=["portainer"], monitored_conditions=["status"])
+    await api.run()
+    await start_events(api)
+    await settle()
+    stale = api.get_container("portainer")
+
+    # a duplicate create event for the same container keeps the monitor
+    engine.event("create", "portainer")
+    await settle()
+    assert api.get_container("portainer") is stale
+
+    # recreated, the destroy event was missed
+    engine.remove("portainer")
+    new = engine.add("portainer")
+    engine.event("create", "portainer")
+    await settle()
+
+    fresh = api.get_container("portainer")
+    assert fresh is not stale
+    assert fresh._container is new
+    assert stale._task.cancelled() or stale._task.done()
