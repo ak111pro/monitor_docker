@@ -45,6 +45,9 @@ DEFAULT_BUTTONNAME = "{name} Restart"
 
 COMPONENTS = ["sensor", "switch", "button"]
 
+# Dispatcher signal (format with the instance name): a container to add
+SIGNAL_CONTAINER_ADDED = "monitor_docker_{}_container_added"
+
 SERVICE_RESTART = "restart"
 SERVICE_RELOAD = "reload"
 

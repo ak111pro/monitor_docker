@@ -28,6 +28,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers.discovery import load_platform
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -79,6 +80,7 @@ from .const import (
     DOCKER_STATS_MEMORY_PERCENTAGE,
     DOMAIN,
     PRECISION,
+    SIGNAL_CONTAINER_ADDED,
 )
 
 # DeviceInfo["via_device_id"] exists since Home Assistant 2026.10
@@ -887,14 +889,10 @@ class DockerAPI:
             # Lets wait 1 second before we try to create sensors/switches/buttons
             await asyncio.sleep(1)
 
-            for component in COMPONENTS:
-                load_platform(
-                    self._hass,
-                    component,
-                    DOMAIN,
-                    {CONF_NAME: self._instance, CONTAINER: cname},
-                    self._config,
-                )
+            # The platforms of the config entry add the entities
+            async_dispatcher_send(
+                self._hass, SIGNAL_CONTAINER_ADDED.format(self._instance), cname
+            )
 
     #############################################################
     def _container_gone(self, monitor: "DockerContainerAPI") -> None:

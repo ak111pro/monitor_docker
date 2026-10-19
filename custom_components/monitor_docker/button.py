@@ -14,6 +14,7 @@ from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
@@ -30,6 +31,7 @@ from .const import (
     CONTAINER,
     CONTAINER_INFO_STATE,
     DOMAIN,
+    SIGNAL_CONTAINER_ADDED,
     SERVICE_RESTART,
 )
 from . import legacy_ids
@@ -54,11 +56,27 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Sensor set up for Hass.io config entry."""
+    instance = config_entry.data[CONF_NAME]
     await async_setup_platform(
         hass=hass,
         config=config_entry.data,
         async_add_entities=async_add_entities,
-        discovery_info={"name": config_entry.data[CONF_NAME]},
+        discovery_info={CONF_NAME: instance},
+    )
+
+    async def async_container_added(cname: str) -> None:
+        """Add the entities of a container that appeared after start-up."""
+        await async_setup_platform(
+            hass=hass,
+            config=config_entry.data,
+            async_add_entities=async_add_entities,
+            discovery_info={CONF_NAME: instance, CONTAINER: cname},
+        )
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, SIGNAL_CONTAINER_ADDED.format(instance), async_container_added
+        )
     )
 
 

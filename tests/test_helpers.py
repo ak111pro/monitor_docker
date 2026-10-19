@@ -49,7 +49,7 @@ async def make_api(hass: HomeAssistant, engine: FakeEngine):
 
     with (
         patch.object(helpers.aiodocker, "Docker", engine),
-        patch.object(helpers, "load_platform"),
+        patch.object(helpers, "async_dispatcher_send"),
         patch.object(helpers.asyncio, "sleep", _fast_sleep),
     ):
         yield _make
@@ -229,7 +229,9 @@ async def test_events_follow_the_selection(make_api, engine: FakeEngine) -> None
     engine.event("create", "md-new")
     await settle()
     assert "md-new" in api.list_containers()
-    helpers.load_platform.assert_called()
+    helpers.async_dispatcher_send.assert_called_with(
+        api._hass, "monitor_docker_Docker_container_added", "md-new"
+    )
 
     # destroy of an unselected container is ignored quietly
     engine.remove("other")
